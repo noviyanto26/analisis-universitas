@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import io
+import altair as alt
 
-def process_data(df, selected_semester, selected_prodi):
+def process_data(df, selected_semesters, selected_prodi):
     """
     Fungsi untuk memproses DataFrame input berdasarkan semester dan prodi yang dipilih,
     dengan perhitungan persentase yang benar.
@@ -16,13 +17,13 @@ def process_data(df, selected_semester, selected_prodi):
         'Universitas Bunda Mulia'
     ]
 
-    # --- PERBAIKAN LOGIKA PERHITUNGAN PERSENTASE ---
-    # 1. Filter data HANYA berdasarkan semester dan universitas untuk mendapatkan TOTAL KESELURUHAN.
+    # 1. Filter data berdasarkan SEMUA SEMESTER yang dipilih dan universitas
+    #    Ini untuk mendapatkan TOTAL KESELURUHAN sebagai pembagi persentase yang benar.
     df_univ_semester_filtered = df[
-        (df['id_smt'] == selected_semester) &
+        (df['id_smt'].isin(selected_semesters)) & # <-- MODIFIKASI UTAMA
         (df['nama_pt'].isin(target_universities))
     ]
-    # Hitung total mahasiswa per universitas. Ini akan menjadi pembagi yang benar.
+    # Hitung total mahasiswa per universitas dari semua semester yang dipilih.
     total_per_univ = df_univ_semester_filtered.groupby('nama_pt')['jumlah_mhs'].sum()
     
     # 2. Filter lebih lanjut berdasarkan prodi yang dipilih pengguna
@@ -39,7 +40,7 @@ def process_data(df, selected_semester, selected_prodi):
     master_prodi = master_prodi[master_prodi['nm_prodi'].isin(selected_prodi)]
     master_prodi.rename(columns={'kode_prodi': 'Kode', 'nm_prodi': 'Nama Prodi', 'nm_jenj_didik': 'Jenjang'}, inplace=True)
 
-    # 4. Agregasi dan Pivot data yang sudah difilter final
+    # 4. Agregasi (penjumlahan data dari semester terpilih) dan Pivot
     rekap = df_prodi_filtered.groupby(['nama_pt', 'kode_prodi'])['jumlah_mhs'].sum().reset_index()
     pivot_rekap = rekap.pivot_table(
         index='kode_prodi',
@@ -95,8 +96,9 @@ if uploaded_file is not None:
 
         with col1:
             semester_list = sorted(input_df['id_smt'].unique(), reverse=True)
-            selected_semester = st.selectbox(
-                "**1. Pilih Semester (id_smt):**",
+            # Mengubah st.selectbox menjadi st.multiselect
+            selected_semesters = st.multiselect(
+                "**1. Pilih Semester (bisa lebih dari satu):**",
                 semester_list
             )
         
@@ -109,11 +111,11 @@ if uploaded_file is not None:
 
         # Tombol untuk memulai proses analisis
         if st.button("🚀 3. Buat Rekapitulasi"):
-            if not selected_prodi:
-                st.warning("Mohon pilih minimal satu Nama Prodi untuk dianalisis.")
+            if not selected_semesters or not selected_prodi:
+                st.warning("Mohon pilih minimal satu Semester dan satu Nama Prodi untuk dianalisis.")
             else:
-                with st.spinner(f"Memproses data untuk semester {selected_semester}..."):
-                    output_df = process_data(input_df, selected_semester, selected_prodi)
+                with st.spinner(f"Memproses data..."):
+                    output_df = process_data(input_df, selected_semesters, selected_prodi)
 
                     if output_df is not None:
                         st.success("🎉 Analisis Selesai!")
@@ -128,6 +130,33 @@ if uploaded_file is not None:
                             display_columns.append((univ, '%'))
                         display_df.columns = pd.MultiIndex.from_tuples(display_columns)
                         st.dataframe(display_df.style.format(precision=2))
+                        
+                        # --- FUNGSI GRAFIK ---
+                        st.subheader("Visualisasi Data Jumlah Mahasiswa")
+                        
+                        jumlah_cols = ['Nama Prodi'] + [col for col in output_df.columns if '_jumlah' in col]
+                        chart_data = output_df[jumlah_cols]
+                        
+                        chart_data_long = chart_data.melt(
+                            id_vars='Nama Prodi', 
+                            var_name='Universitas', 
+                            value_name='Jumlah Mahasiswa'
+                        )
+                        chart_data_long['Universitas'] = chart_data_long['Universitas'].str.replace('_jumlah', '')
+                        
+                        chart = alt.Chart(chart_data_long).mark_bar().encode(
+                            x=alt.X('Universitas:N', title='Universitas', sort='-y'),
+                            y=alt.Y('Jumlah Mahasiswa:Q', title='Jumlah Mahasiswa'),
+                            color='Universitas:N',
+                            tooltip=['Nama Prodi', 'Universitas', 'Jumlah Mahasiswa']
+                        ).properties(
+                            title='Perbandingan Jumlah Mahasiswa per Program Studi di Berbagai Universitas'
+                        ).facet(
+                            row=alt.Row('Nama Prodi:N', title='Nama Program Studi')
+                        ).resolve_scale(
+                            y='independent'
+                        )
+                        st.altair_chart(chart, use_container_width=True)
 
                         # --- Fungsi Unduh Excel ---
                         output_buffer = io.BytesIO()
@@ -145,10 +174,12 @@ if uploaded_file is not None:
                         
                         output_buffer.seek(0)
                         
+                        # Membuat nama file yang dinamis
+                        semester_str = '_'.join(map(str, selected_semesters))
                         st.download_button(
                             label="📥 **4. Unduh Hasil Rekapitulasi (Excel)**",
                             data=output_buffer,
-                            file_name=f"Rekapitulasi_{selected_semester}.xlsx",
+                            file_name=f"Rekapitulasi_{semester_str}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 

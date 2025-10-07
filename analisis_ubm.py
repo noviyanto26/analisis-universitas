@@ -4,7 +4,8 @@ import io
 
 def process_data(df, selected_semester, selected_prodi):
     """
-    Fungsi untuk memproses DataFrame input berdasarkan semester dan prodi yang dipilih.
+    Fungsi untuk memproses DataFrame input berdasarkan semester dan prodi yang dipilih,
+    dengan perhitungan persentase yang benar.
     """
     # Daftar universitas target untuk analisis
     target_universities = [
@@ -15,26 +16,31 @@ def process_data(df, selected_semester, selected_prodi):
         'Universitas Bunda Mulia'
     ]
 
-    # 1. Buat daftar master semua program studi unik dari data mentah
-    all_prodi_master = df[['kode_prodi', 'nm_prodi', 'nm_jenj_didik']].drop_duplicates()
-    all_prodi_master.rename(columns={'kode_prodi': 'Kode', 'nm_prodi': 'Nama Prodi', 'nm_jenj_didik': 'Jenjang'}, inplace=True)
-    
-    # Filter daftar master ini berdasarkan prodi yang dipilih pengguna
-    master_prodi = all_prodi_master[all_prodi_master['Nama Prodi'].isin(selected_prodi)].sort_values('Kode')
-
-    # 2. Filter data utama berdasarkan semester, universitas, dan prodi yang dipilih
-    df_filtered = df[
+    # --- PERBAIKAN LOGIKA PERHITUNGAN PERSENTASE ---
+    # 1. Filter data HANYA berdasarkan semester dan universitas untuk mendapatkan TOTAL KESELURUHAN.
+    df_univ_semester_filtered = df[
         (df['id_smt'] == selected_semester) &
-        (df['nama_pt'].isin(target_universities)) &
-        (df['nm_prodi'].isin(selected_prodi))
+        (df['nama_pt'].isin(target_universities))
+    ]
+    # Hitung total mahasiswa per universitas. Ini akan menjadi pembagi yang benar.
+    total_per_univ = df_univ_semester_filtered.groupby('nama_pt')['jumlah_mhs'].sum()
+    
+    # 2. Filter lebih lanjut berdasarkan prodi yang dipilih pengguna
+    df_prodi_filtered = df_univ_semester_filtered[
+        df_univ_semester_filtered['nm_prodi'].isin(selected_prodi)
     ].copy()
 
-    if df_filtered.empty:
+    if df_prodi_filtered.empty:
         st.warning(f"Tidak ada data ditemukan untuk kombinasi semester dan prodi yang dipilih.")
         return None
+        
+    # 3. Buat daftar master prodi dari prodi yang dipilih
+    master_prodi = df[['kode_prodi', 'nm_prodi', 'nm_jenj_didik']].drop_duplicates()
+    master_prodi = master_prodi[master_prodi['nm_prodi'].isin(selected_prodi)]
+    master_prodi.rename(columns={'kode_prodi': 'Kode', 'nm_prodi': 'Nama Prodi', 'nm_jenj_didik': 'Jenjang'}, inplace=True)
 
-    # 3. Agregasi dan Pivot data yang sudah difilter
-    rekap = df_filtered.groupby(['nama_pt', 'kode_prodi'])['jumlah_mhs'].sum().reset_index()
+    # 4. Agregasi dan Pivot data yang sudah difilter final
+    rekap = df_prodi_filtered.groupby(['nama_pt', 'kode_prodi'])['jumlah_mhs'].sum().reset_index()
     pivot_rekap = rekap.pivot_table(
         index='kode_prodi',
         columns='nama_pt',
@@ -42,14 +48,13 @@ def process_data(df, selected_semester, selected_prodi):
     )
     pivot_rekap.rename_axis(index={'kode_prodi': 'Kode'}, inplace=True)
 
-    # 4. Gabungkan daftar master prodi dengan data pivot
+    # 5. Gabungkan daftar master prodi dengan data pivot
     final_df = pd.merge(master_prodi, pivot_rekap, on='Kode', how='left').fillna(0)
 
-    # 5. Hitung persentase dan siapkan kolom output
+    # 6. Siapkan kolom output
     output_df = final_df[['Kode', 'Nama Prodi', 'Jenjang']].copy()
     
     universities_in_data = [univ for univ in target_universities if univ in final_df.columns]
-    total_per_univ = final_df[universities_in_data].sum()
 
     for univ in target_universities:
         jumlah_col_name = f'{univ}_jumlah'
@@ -57,6 +62,7 @@ def process_data(df, selected_semester, selected_prodi):
         
         output_df[jumlah_col_name] = final_df.get(univ, 0).astype(int)
         
+        # Gunakan total_per_univ yang sudah dihitung di awal
         if total_per_univ.get(univ, 0) > 0:
             output_df[percent_col_name] = (output_df[jumlah_col_name] / total_per_univ[univ] * 100).round(2)
         else:
